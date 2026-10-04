@@ -1,0 +1,6 @@
+[
+  { "id": "radius-sock", "name": "Radius Sock", "price": 149000, "collection": "Everyday kit" },
+  { "id": "radius-tee", "name": "Radius Tee", "price": 299000, "collection": "Core collection" },
+  { "id": "radius-cap", "name": "Radius Cap", "price": 249000, "collection": "Everyday kit" },
+  { "id": "performance-tee", "name": "Performance Tee", "price": 399000, "collection": "Performance collection" }
+]

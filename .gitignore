@@ -1,0 +1,15 @@
+node_modules/
+data/accounts.json
+data/operations.json
+data/*.tmp
+dist/uploads/
+.env
+.env.*
+!.env.example
+.playwright-mcp/
+.sites-checkout/
+.openai/
+.agents/
+.codex/
+.aws/
+*.log

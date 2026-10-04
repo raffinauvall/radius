@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin | Radius Society</title>
+    <link rel="icon" href="/assets/radius-logo.jpg?v=2" type="image/jpeg" />
+    <link rel="stylesheet" href="/styles.css?v=10" />
+    <link rel="stylesheet" href="/admin.css?v=2" />
+  </head>
+  <body class="admin-page">
+    <a class="skip-link" href="#admin-content">Lewati ke konten admin</a>
+    <div class="admin-shell">
+      <aside class="admin-sidebar">
+        <div class="admin-brand"><a href="/?v=10" aria-label="Radius Society home"><img src="/assets/radius-logo.jpg" alt="Radius Society" width="40" height="40" /></a><div><strong>RADIUS</strong><span>Administration</span></div><button class="admin-menu" type="button" aria-controls="admin-nav" aria-expanded="false">Menu admin</button></div>
+        <nav id="admin-nav" aria-label="Navigasi admin"><a href="#overview" data-nav="overview">Ringkasan</a><a href="#products" data-nav="products">Merchandise</a><a href="#events" data-nav="events">Events</a><a href="#tickets" data-nav="tickets">Tiket & check-in</a><a href="#orders" data-nav="orders">Orders</a><a href="#users" data-nav="users">Users</a></nav>
+        <div class="admin-sidebar-bottom"><a href="/?v=10">Lihat website</a><div data-admin-identity></div><button type="button" data-admin-signout>Sign out</button></div>
+      </aside>
+      <main id="admin-content" class="admin-content" tabindex="-1" data-admin-root><div class="admin-state" role="status">Memuat data operasional Radius...</div></main>
+    </div>
+    <dialog class="admin-dialog" aria-labelledby="editor-title" data-editor>
+      <div class="editor-heading"><h2 id="editor-title">Edit</h2><button class="admin-close" type="button" data-close-editor aria-label="Tutup form">×</button></div>
+      <div data-editor-body></div>
+    </dialog>
+    <div class="admin-toast" role="status" data-admin-toast hidden></div>
+    <script src="/admin.js?v=2" defer></script>
+  </body>
+</html>

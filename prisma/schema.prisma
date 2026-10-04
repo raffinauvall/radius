@@ -1,0 +1,131 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Customer {
+  id                 String       @id @default(cuid())
+  email              String       @unique
+  name               String
+  passwordHash       String?
+  role               String       @default("USER")
+  status             String       @default("ACTIVE")
+  phone              String?
+  membershipStatus   String       @default("COMMUNITY")
+  membershipPlan     String       @default("COMMUNITY")
+  membershipRenewalDate DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  orders             Order[]
+  tickets            Ticket[]
+  memberships        Membership[]
+}
+
+model Event {
+  id          String       @id @default(cuid())
+  slug        String       @unique
+  name        String
+  city        String
+  startsAt    DateTime
+  distance    String?
+  category    String?
+  venue       String?
+  imageUrl    String?
+  active      Boolean      @default(true)
+  archived    Boolean      @default(false)
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  ticketTypes TicketType[]
+  tickets     Ticket[]
+}
+
+model TicketType {
+  id        String   @id @default(cuid())
+  eventId   String
+  name      String
+  price     Int
+  capacity  Int?
+  isDefault Boolean  @default(false)
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  tickets   Ticket[]
+  @@unique([eventId, name])
+}
+
+model Ticket {
+  id           String     @id @default(cuid())
+  code         String     @unique
+  checkInToken String     @unique
+  entryConsumed Boolean   @default(false)
+  customerId   String
+  eventId      String
+  ticketTypeId String
+  status       String     @default("VALID")
+  price        Int        @default(0)
+  checkedInAt  DateTime?
+  checkedInBy  String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  customer     Customer   @relation(fields: [customerId], references: [id])
+  event        Event      @relation(fields: [eventId], references: [id])
+  ticketType   TicketType @relation(fields: [ticketTypeId], references: [id])
+  orderItems   OrderItem[]
+}
+
+model Order {
+  id         String      @id @default(cuid())
+  orderNo    String      @unique
+  customerId String
+  status     String      @default("PENDING")
+  total      Int
+  address    String?
+  tracking   String?
+  notes      String?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  customer   Customer    @relation(fields: [customerId], references: [id])
+  items      OrderItem[]
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  ticketId  String?
+  productId String?
+  name      String
+  quantity  Int     @default(1)
+  unitPrice Int
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  ticket    Ticket? @relation(fields: [ticketId], references: [id])
+  product   Product? @relation(fields: [productId], references: [id])
+}
+
+model Product {
+  id          String      @id @default(cuid())
+  name        String
+  price       Int
+  collection  String
+  description String?
+  imageUrl    String?
+  stock       Int?
+  active      Boolean     @default(true)
+  archived    Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  orderItems  OrderItem[]
+}
+
+model Membership {
+  id         String    @id @default(cuid())
+  customerId String
+  plan       String
+  status     String    @default("ACTIVE")
+  startedAt  DateTime
+  renewsAt   DateTime?
+  cancelledAt DateTime?
+  customer   Customer  @relation(fields: [customerId], references: [id])
+}

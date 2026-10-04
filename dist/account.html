@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Account | Radius Society</title><link rel="icon" type="image/jpeg" href="/assets/radius-logo.jpg?v=2" /><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/account.css?v=11" />
+  </head>
+  <body class="account-page">
+    <a class="skip-link" href="#account-content">Lewati ke konten akun</a>
+    <div class="member-shell">
+      <aside class="member-sidebar">
+        <div class="member-brand"><a href="/" aria-label="Radius Society home"><img src="/assets/radius-logo.jpg" width="44" height="44" alt="Radius Society" /></a><div><strong>RADIUS</strong><span>Society / Akun</span></div><button class="member-menu" type="button" aria-controls="member-nav" aria-expanded="false">Menu akun</button></div>
+        <nav id="member-nav" class="member-nav" aria-label="Navigasi akun"></nav>
+        <div class="sidebar-bottom"><a class="sidebar-home" href="/">Kembali ke Radius</a><div class="sidebar-person" data-sidebar-person></div><button class="signout-button" type="button" data-signout>Sign out</button></div>
+      </aside>
+      <div class="member-workspace">
+        <main id="account-content" class="member-content" tabindex="-1" data-account-root><div class="member-state" role="status">Memuat tiket dan aktivitas akun...</div></main>
+      </div>
+    </div>
+    <dialog class="member-dialog" aria-labelledby="member-dialog-title" data-member-dialog><div class="dialog-top"><h2 id="member-dialog-title">Detail</h2><button class="member-close" type="button" data-close-dialog aria-label="Tutup detail">×</button></div><div data-dialog-content></div></dialog>
+    <div class="member-toast" role="status" hidden data-member-toast></div>
+    <script src="/account.js?v=11" defer></script>
+  </body>
+</html>
