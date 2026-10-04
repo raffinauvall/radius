@@ -330,7 +330,7 @@ async function handleRequest(req, res) {
     send(res, error.status || 500, { error: error.status ? error.message : 'Server belum bisa memproses request. Coba lagi.' });
   }
 }
-const server = createServer(async (req, res) => {
+export const server = createServer(async (req, res) => {
   try {
     if (new URL(req.url, 'http://localhost').pathname.startsWith('/api/')) await withState(() => handleRequest(req, res));
     else await handleRequest(req, res);
@@ -339,5 +339,7 @@ const server = createServer(async (req, res) => {
     send(res, error.status || 503, { error: error.status ? error.message : 'Database belum bisa diakses. Coba lagi.' });
   }
 });
-const port = Number(process.argv[2] || process.env.PORT || 4176);
-server.listen(port, '127.0.0.1', () => console.log(`Radius: http://localhost:${server.address().port}`));
+if (!process.env.VERCEL) {
+  const port = Number(process.argv[2] || process.env.PORT || 4176);
+  server.listen(port, '127.0.0.1', () => console.log(`Radius: http://localhost:${server.address().port}`));
+}
