@@ -1,0 +1,8 @@
+data/accounts.json
+data/operations.json
+dist/uploads/
+.env
+.env.*
+.playwright-mcp/
+.sites-checkout/
+.openai/

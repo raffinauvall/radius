@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "node",
+  "buildCommand": "npm run build",
+  "functions": {
+    "server.js": {
+      "includeFiles": "{dist/**,data/customer.json,node_modules/@zxing/browser/umd/zxing-browser.min.js}",
+      "excludeFiles": "{data/accounts.json,data/operations.json,dist/uploads/**,checks/**}"
+    }
+  }
+}

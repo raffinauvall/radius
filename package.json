@@ -4,15 +4,25 @@
   "type": "module",
   "scripts": {
     "setup": "node scripts/setup-demo.js",
+    "build": "node scripts/build.js",
+    "db:setup": "node scripts/build.js",
+    "postinstall": "node scripts/build.js --generate-only",
     "start": "node server.js",
     "test": "node --test checks/*.test.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": "22.x"
   },
   "dependencies": {
+    "@prisma/client": "6.19.3",
     "@zxing/browser": "0.1.5",
     "@zxing/library": "0.21.3",
     "qrcode-generator": "2.0.4"
+  },
+  "devDependencies": {
+    "prisma": "6.19.3"
+  },
+  "overrides": {
+    "deepmerge-ts": "8.0.2"
   }
 }

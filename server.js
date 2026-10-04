@@ -1,46 +1,35 @@
 import { createServer } from 'node:http';
-import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import qrcode from 'qrcode-generator';
+import { state, withState, commit, usesDatabase, getSession, putSession, deleteSession, deleteUserSessions, saveImage, readImage } from './storage.js';
 
 const project = dirname(fileURLToPath(import.meta.url));
 const publicRoot = resolve(project, 'dist');
-const accountsFile = resolve(process.env.RADIUS_ACCOUNT_FILE || resolve(project, 'data/accounts.json'));
-const operationsFile = resolve(dirname(accountsFile), 'operations.json');
-const uploadRoot = resolve(process.env.RADIUS_UPLOAD_DIR || resolve(publicRoot, 'uploads'));
-let accounts = JSON.parse(await readFile(accountsFile, 'utf8'));
-let operations;
-try { operations = JSON.parse(await readFile(operationsFile, 'utf8')); } catch (error) {
-  if (error.code !== 'ENOENT') throw error;
-  operations = JSON.parse(await readFile(resolve(project, 'data/operations.seed.json'), 'utf8'));
-  await writeFile(operationsFile, JSON.stringify(operations, null, 2) + '\n');
-}
-const sessions = new Map();
 const sessionAge = 8 * 60 * 60;
-let writes = Promise.resolve();
 const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
 const publicUser = ({ id, email, name, role = 'USER', status = 'ACTIVE', membershipPlan = 'COMMUNITY', membershipRenewalDate = null, createdAt }) => ({ id, email, name, role, status, membershipPlan, membershipRenewalDate, createdAt });
-const cookie = (token, age = sessionAge) => `radius_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}`;
+const cookie = (token, age = sessionAge) => `radius_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${process.env.VERCEL ? '; Secure' : ''}`;
 const tokenFrom = req => req.headers.cookie?.split(';').map(part => part.trim()).find(part => part.startsWith('radius_session='))?.slice('radius_session='.length);
 const send = (res, status, data, headers = {}) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers });
   res.end(JSON.stringify(data));
 };
 const fail = (status, message) => Object.assign(new Error(message), { status });
-function signedIn(req) {
+async function signedIn(req) {
   const token = tokenFrom(req);
-  const session = sessions.get(token);
-  if (!session || session.expiresAt < Date.now()) { sessions.delete(token); throw fail(401, 'Silakan sign in kembali.'); }
-  const user = accounts.find(account => account.id === session.userId);
-  if (!user || user.status === 'DISABLED') { sessions.delete(token); throw fail(401, 'Silakan sign in kembali.'); }
+  const session = await getSession(token);
+  if (!session || session.expiresAt < Date.now()) { await deleteSession(token); throw fail(401, 'Silakan sign in kembali.'); }
+  const user = state().accounts.find(account => account.id === session.userId);
+  if (!user || user.status === 'DISABLED' || session.credentialHash !== user.passwordHash) { await deleteSession(token); throw fail(401, 'Silakan sign in kembali.'); }
   return user;
 }
-function startSession(req, res, user) {
-  sessions.delete(tokenFrom(req));
+async function startSession(req, res, user) {
+  await deleteSession(tokenFrom(req));
   const token = randomBytes(32).toString('hex');
-  sessions.set(token, { userId: user.id, expiresAt: Date.now() + sessionAge * 1000 });
+  await putSession(token, user, Date.now() + sessionAge * 1000);
   send(res, 200, { user: publicUser(user) }, { 'Set-Cookie': cookie(token) });
 }
 function passwordMatches(password, saved) {
@@ -50,22 +39,7 @@ function passwordMatches(password, saved) {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 const hashPassword = password => { const salt = randomBytes(16).toString('hex'); return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`; };
-function commit(kind, change) {
-  // ponytail: one local server serializes JSON writes; use DB transactions when running multiple processes.
-  const pending = writes.then(async () => {
-    const next = structuredClone(kind === 'accounts' ? accounts : operations);
-    const result = change(next);
-    const file = kind === 'accounts' ? accountsFile : operationsFile;
-    const temporary = `${file}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
-    await rename(temporary, file);
-    if (kind === 'accounts') accounts = next; else operations = next;
-    return result;
-  });
-  writes = pending.catch(() => {});
-  return pending;
-}
-if (operations.tickets.some(ticket => !ticket.checkInToken || ticket.entryConsumed === undefined)) {
+if (!usesDatabase && state()?.operations.tickets.some(ticket => !ticket.checkInToken || ticket.entryConsumed === undefined)) {
   await commit('operations', store => {
     for (const ticket of store.tickets) {
       ticket.checkInToken ||= randomBytes(32).toString('hex');
@@ -73,12 +47,16 @@ if (operations.tickets.some(ticket => !ticket.checkInToken || ticket.entryConsum
     }
   });
 }
+function assertAdminUnchanged(admin) {
+  const current = state().accounts.find(user => user.id === admin.id);
+  if (!current || current.status === 'DISABLED' || current.role !== 'ADMIN' || current.passwordHash !== admin.passwordHash) throw fail(403, 'Akses admin berubah. Silakan sign in kembali.');
+}
 function consumeTicket(store, ticket, admin, eventId) {
   if (ticket.eventId !== eventId) throw fail(400, 'Tiket ini untuk event lain. Pilih event yang sesuai.');
   if (ticket.entryConsumed || ticket.status === 'ATTENDED') throw fail(409, 'Tiket sudah dipakai untuk check-in. Tidak bisa digunakan lagi.');
   if (ticket.status !== 'VALID') throw fail(400, 'Tiket dibatalkan. Check-in ditolak.');
   if (!store.events.some(event => event.id === eventId && event.active && !event.archived)) throw fail(400, 'Event tidak aktif. Check-in ditolak.');
-  if (!accounts.some(user => user.id === ticket.customerId && user.status !== 'DISABLED')) throw fail(400, 'Akun peserta tidak aktif. Check-in ditolak.');
+  if (!state().accounts.some(user => user.id === ticket.customerId && user.status !== 'DISABLED')) throw fail(400, 'Akun peserta tidak aktif. Check-in ditolak.');
   const now = new Date().toISOString();
   Object.assign(ticket, { status: 'ATTENDED', entryConsumed: true, checkedInAt: now, checkedInBy: admin.id, updatedAt: now });
   return ticket;
@@ -89,15 +67,16 @@ async function scanTicket(data, admin) {
   const token = payload.match(/^RADIUS1:([a-f0-9]{64})$/)?.[1];
   if (!token && !/^RAD[A-Z0-9-]{4,50}$/.test(payload)) throw fail(400, 'Barcode bukan tiket Radius. Scan QR tiket yang benar.');
   return commit('operations', store => {
+    assertAdminUnchanged(admin);
     const ticket = store.tickets.find(ticket => token ? ticket.checkInToken === token : ticket.code === payload);
     if (!ticket) throw fail(404, 'Tiket tidak ditemukan. Check-in ditolak.');
     consumeTicket(store, ticket, admin, eventId);
-    return { ticket: { id: ticket.id, code: ticket.code, eventId: ticket.eventId, event: ticket.event, type: ticket.type, status: ticket.status, entryConsumed: true, checkedInAt: ticket.checkedInAt, checkedInBy: admin.id }, customerName: accounts.find(user => user.id === ticket.customerId).name };
+    return { ticket: { id: ticket.id, code: ticket.code, eventId: ticket.eventId, event: ticket.event, type: ticket.type, status: ticket.status, entryConsumed: true, checkedInAt: ticket.checkedInAt, checkedInBy: admin.id }, customerName: state().accounts.find(user => user.id === ticket.customerId).name };
   });
 }
-function ticketQR(req, res, id) {
-  const user = signedIn(req);
-  const ticket = operations.tickets.find(ticket => ticket.id === id && ticket.customerId === user.id);
+async function ticketQR(req, res, id) {
+  const user = await signedIn(req);
+  const ticket = state().operations.tickets.find(ticket => ticket.id === id && ticket.customerId === user.id);
   if (!ticket) throw fail(404, 'Tiket tidak ditemukan.');
   if (ticket.status !== 'VALID' || ticket.entryConsumed) throw fail(409, 'Barcode tidak tersedia. Tiket sudah dipakai atau dibatalkan.');
   const qr = qrcode(0, 'M'); qr.addData(`RADIUS1:${ticket.checkInToken}`); qr.make();
@@ -135,14 +114,14 @@ async function bodyJSON(req) {
 }
 async function accountData(user) {
   const fixture = JSON.parse(await readFile(resolve(project, 'data/customer.json'), 'utf8'));
-  const tickets = operations.tickets.filter(ticket => ticket.customerId === user.id);
-  const orderHistory = operations.orders.filter(order => order.customerId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ notes, ...order }) => ({ ...order, item: order.items.map(item => item.name).join(', '), quantity: order.items.reduce((n, item) => n + item.quantity, 0) }));
+  const tickets = state().operations.tickets.filter(ticket => ticket.customerId === user.id);
+  const orderHistory = state().operations.orders.filter(order => order.customerId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ notes, ...order }) => ({ ...order, item: order.items.map(item => item.name).join(', '), quantity: order.items.reduce((n, item) => n + item.quantity, 0) }));
   const paid = user.membershipPlan === 'PLUS' || user.membershipPlan === 'YEARLY';
   const membership = paid ? { ...fixture.membership, name: user.membershipPlan === 'YEARLY' ? 'Radius+ Yearly' : 'Radius+', price: user.membershipPlan === 'YEARLY' ? 999000 : 99000, interval: user.membershipPlan === 'YEARLY' ? 'tahun' : 'bulan', renewalDate: user.membershipRenewalDate ? dateID(user.membershipRenewalDate) : null } : { name: 'Radius Community', price: 0, renewalDate: null, benefits: [{ title: 'Event updates', description: 'Informasi event Radius berikutnya.' }, { title: 'Community access', description: 'Akses ke komunitas Radius.' }, { title: 'Partner offers', description: 'Penawaran partner untuk komunitas Radius.' }] };
   return { ...publicUser(user), eventsAttended: tickets.filter(ticket => ticket.status === 'ATTENDED').length, ticketsPurchased: tickets.length, orders: orderHistory.length, tickets, orderHistory, membership };
 }
-function adminUser(req) {
-  const user = signedIn(req);
+async function adminUser(req) {
+  const user = await signedIn(req);
   if (user.role !== 'ADMIN') throw fail(403, 'Akses hanya untuk admin Radius.');
   return user;
 }
@@ -187,13 +166,12 @@ async function uploadImage(req) {
   const webp = image.length >= 20 && image.toString('ascii', 0, 4) === 'RIFF' && image.toString('ascii', 8, 12) === 'WEBP' && image.readUInt32LE(4) + 8 === image.length;
   if (!(mime === 'image/png' && png) && !(mime === 'image/jpeg' && jpg) && !(mime === 'image/webp' && webp)) throw fail(400, 'File bukan gambar yang sesuai format.');
   const file = `${randomUUID()}.${png ? 'png' : jpg ? 'jpg' : 'webp'}`;
-  await mkdir(uploadRoot, { recursive: true });
-  await writeFile(resolve(uploadRoot, file), image, { flag: 'wx' });
+  await saveImage(file, mime, image);
   return { imageUrl: `/uploads/${file}` };
 }
 async function handleAdmin(req, res, path) {
-  const admin = adminUser(req);
-  if (req.method === 'GET' && path === '/api/admin/data') return send(res, 200, { ...operations, users: accounts.map(publicUser), currentUser: publicUser(admin) });
+  const admin = await adminUser(req);
+  if (req.method === 'GET' && path === '/api/admin/data') return send(res, 200, { ...state().operations, users: state().accounts.map(publicUser), currentUser: publicUser(admin) });
   if (req.method === 'POST' && path === '/api/admin/images') return send(res, 201, await uploadImage(req));
   if (req.method === 'POST' && path === '/api/admin/check-in') return send(res, 200, await scanTicket(await bodyJSON(req), admin));
   const match = path.match(/^\/api\/admin\/(products|events|users|tickets|orders)(?:\/([\w-]+))?$/);
@@ -204,6 +182,7 @@ async function handleAdmin(req, res, path) {
   if (kind === 'users') {
     if (req.method === 'DELETE') throw fail(405, 'Nonaktifkan user untuk mempertahankan riwayat order dan tiket.');
     const result = await commit('accounts', store => {
+      assertAdminUnchanged(admin);
       const previous = id ? store.find(user => user.id === id) : null;
       if (id && !previous) throw fail(404, 'User tidak ditemukan.');
       const draft = { ...previous, ...data };
@@ -221,10 +200,11 @@ async function handleAdmin(req, res, path) {
       if (previous) store[store.indexOf(previous)] = record; else store.push(record);
       return publicUser(record);
     });
-    if (data.password) for (const [token, session] of sessions) if (session.userId === result.id) sessions.delete(token);
+    if (data.password) await deleteUserSessions(result.id);
     return send(res, id ? 200 : 201, result);
   }
   const result = await commit('operations', store => {
+    assertAdminUnchanged(admin);
     const list = store[kind];
     const previous = id ? list.find(record => record.id === id) : null;
     if (id && !previous) throw fail(404, 'Record tidak ditemukan.');
@@ -252,7 +232,7 @@ async function handleAdmin(req, res, path) {
         }
         record = { ...previous, status, updatedAt: now };
       } else {
-        const user = accounts.find(user => user.id === data.customerId && user.status !== 'DISABLED');
+        const user = state().accounts.find(user => user.id === data.customerId && user.status !== 'DISABLED');
         const event = store.events.find(event => event.id === data.eventId && event.active && !event.archived);
         const type = event?.tickets.find(type => type.name === data.type);
         if (!user || !event || !type) throw fail(400, 'Pilih user, event aktif, dan jenis tiket yang tersedia.');
@@ -262,7 +242,7 @@ async function handleAdmin(req, res, path) {
     } else if (kind === 'orders') {
       if (req.method === 'DELETE') throw fail(405, 'Batalkan order melalui status untuk mempertahankan riwayat.');
       const customerId = previous?.customerId || draft.customerId;
-      if (!accounts.some(user => user.id === customerId && (previous || user.status !== 'DISABLED'))) throw fail(400, 'Pilih user aktif.');
+      if (!state().accounts.some(user => user.id === customerId && (previous || user.status !== 'DISABLED'))) throw fail(400, 'Pilih user aktif.');
       if (!Array.isArray(draft.items) || !draft.items.length || draft.items.length > 30) throw fail(400, 'Tambahkan minimal satu item order.');
       const items = draft.items.map(item => {
         const product = store.products.find(product => product.id === item.productId);
@@ -281,30 +261,31 @@ async function handleAdmin(req, res, path) {
   });
   return send(res, id ? 200 : 201, result);
 }
-const server = createServer(async (req, res) => {
+async function handleRequest(req, res) {
   try {
     const path = new URL(req.url, 'http://localhost').pathname;
     if (path.startsWith('/api/')) {
-      if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) throw fail(403, 'Request tidak diizinkan.');
+      const protocol = process.env.VERCEL ? 'https' : 'http';
+      if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin && req.headers.origin !== `${protocol}://${req.headers.host}`) throw fail(403, 'Request tidak diizinkan.');
       if (path.startsWith('/api/admin/')) return await handleAdmin(req, res, path);
-      if (req.method === 'GET' && path === '/api/catalog') return send(res, 200, { products: operations.products.filter(product => product.active && !product.archived), events: operations.events.filter(event => event.active && !event.archived), membership: JSON.parse(await readFile(resolve(publicRoot, 'data/membership.json'), 'utf8')) });
-      if (req.method === 'GET' && path === '/api/session') return send(res, 200, { user: publicUser(signedIn(req)) });
-      if (req.method === 'GET' && path === '/api/account') return send(res, 200, await accountData(signedIn(req)));
+      if (req.method === 'GET' && path === '/api/catalog') return send(res, 200, { products: state().operations.products.filter(product => product.active && !product.archived), events: state().operations.events.filter(event => event.active && !event.archived), membership: JSON.parse(await readFile(resolve(publicRoot, 'data/membership.json'), 'utf8')) });
+      if (req.method === 'GET' && path === '/api/session') return send(res, 200, { user: publicUser(await signedIn(req)) });
+      if (req.method === 'GET' && path === '/api/account') return send(res, 200, await accountData(await signedIn(req)));
       const qrRoute = path.match(/^\/api\/tickets\/([\w-]+)\/qr$/);
-      if (req.method === 'GET' && qrRoute) return ticketQR(req, res, qrRoute[1]);
+      if (req.method === 'GET' && qrRoute) return await ticketQR(req, res, qrRoute[1]);
       if (req.method !== 'POST') throw fail(404, 'Endpoint tidak ditemukan.');
       const data = await bodyJSON(req);
       if (path === '/api/signout') {
-        sessions.delete(tokenFrom(req));
+        await deleteSession(tokenFrom(req));
         return send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0) });
       }
       const email = typeof data.email === 'string' ? data.email.trim().toLowerCase() : '';
       const password = typeof data.password === 'string' ? data.password : '';
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !password || password.length > 128) throw fail(400, 'Isi email dan password yang valid.');
       if (path === '/api/signin') {
-        const user = accounts.find(account => account.email === email);
+        const user = state().accounts.find(account => account.email === email);
         if (!user || user.status === 'DISABLED' || !passwordMatches(password, user.passwordHash)) throw fail(401, 'Email atau password salah.');
-        return startSession(req, res, user);
+        return await startSession(req, res, user);
       }
       if (path === '/api/signup') {
         const name = typeof data.name === 'string' ? data.name.trim() : '';
@@ -315,23 +296,38 @@ const server = createServer(async (req, res) => {
           store.push(user);
           return user;
         });
-        return startSession(req, res, user);
+        return await startSession(req, res, user);
       }
       throw fail(404, 'Endpoint tidak ditemukan.');
     }
     if (!['GET', 'HEAD'].includes(req.method)) throw fail(405, 'Method tidak diizinkan.');
     const isUpload = /^\/uploads\/[a-f\d-]{36}\.(png|jpg|webp)$/.test(path);
     const isScanner = path === '/vendor/zxing-browser.min.js';
-    const file = isScanner ? resolve(project, 'node_modules/@zxing/browser/umd/zxing-browser.min.js') : isUpload ? resolve(uploadRoot, path.slice('/uploads/'.length)) : resolve(publicRoot, `.${decodeURIComponent(path === '/' ? '/index.html' : path)}`);
-    if (!isScanner && !(isUpload ? file.startsWith(uploadRoot + sep) : file.startsWith(publicRoot + sep))) throw fail(404, 'Halaman tidak ditemukan.');
+    if (isUpload) {
+      const image = await readImage(path.slice('/uploads/'.length));
+      if (!image) throw fail(404, 'Gambar tidak ditemukan.');
+      res.writeHead(200, { 'Content-Type': image.mime || types[extname(path)], 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' });
+      return res.end(req.method === 'HEAD' ? undefined : image.content);
+    }
+    const file = isScanner ? resolve(project, 'node_modules/@zxing/browser/umd/zxing-browser.min.js') : resolve(publicRoot, `.${decodeURIComponent(path === '/' ? '/index.html' : path)}`);
+    if (!isScanner && !file.startsWith(publicRoot + sep)) throw fail(404, 'Halaman tidak ditemukan.');
     let content;
     try { content = await readFile(file); } catch { throw fail(404, 'Halaman tidak ditemukan.'); }
     res.writeHead(200, { 'Content-Type': `${types[extname(file)] || 'application/octet-stream'}${['.html', '.css', '.js', '.json', '.svg'].includes(extname(file)) ? '; charset=utf-8' : ''}`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
     res.end(req.method === 'HEAD' ? undefined : content);
   } catch (error) {
-    if (!error.status) console.error(error);
+    if (!error.status) console.error('Radius request failed', error.code || error.name);
     send(res, error.status || 500, { error: error.status ? error.message : 'Server belum bisa memproses request. Coba lagi.' });
   }
+}
+const server = createServer(async (req, res) => {
+  try {
+    if (new URL(req.url, 'http://localhost').pathname.startsWith('/api/')) await withState(() => handleRequest(req, res));
+    else await handleRequest(req, res);
+  } catch (error) {
+    console.error('Radius storage failed', error.code || error.name);
+    send(res, error.status || 503, { error: error.status ? error.message : 'Database belum bisa diakses. Coba lagi.' });
+  }
 });
-const port = Number(process.argv[2] || 4176);
+const port = Number(process.argv[2] || process.env.PORT || 4176);
 server.listen(port, '127.0.0.1', () => console.log(`Radius: http://localhost:${server.address().port}`));

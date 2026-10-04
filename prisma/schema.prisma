@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Customer {
@@ -128,4 +129,26 @@ model Membership {
   renewsAt   DateTime?
   cancelledAt DateTime?
   customer   Customer  @relation(fields: [customerId], references: [id])
+}
+
+model DemoState {
+  id        String   @id
+  payload   Json     @db.JsonB
+  updatedAt DateTime @updatedAt
+}
+
+model DemoSession {
+  tokenHash      String   @id
+  userId         String
+  credentialHash String
+  expiresAt      DateTime
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model DemoUpload {
+  filename  String   @id
+  mime      String
+  content   Bytes
+  createdAt DateTime @default(now())
 }

@@ -1,0 +1,87 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { PrismaClient } from '@prisma/client';
+import { seedDatabase } from '../demo-seed.js';
+
+test('PostgreSQL sessions, uploads, admin data and one-use tickets across server instances', { skip: !process.env.RADIUS_TEST_DATABASE_URL }, async () => {
+  const url = new URL(process.env.RADIUS_TEST_DATABASE_URL);
+  if (!['127.0.0.1', 'localhost'].includes(url.hostname) || !url.pathname.includes('radius_test')) throw new Error('Use an isolated localhost radius_test database, never presentation data.');
+  const schema = `radius_check_${Date.now()}`; url.searchParams.set('schema', schema);
+  const databaseURL = url.toString();
+  const db = new PrismaClient({ datasourceUrl: databaseURL });
+  const env = { ...process.env, DATABASE_URL: databaseURL, DATABASE_URL_UNPOOLED: databaseURL, DIRECT_URL: databaseURL, RADIUS_ACCOUNT_FILE: '', VERCEL: '1' };
+  const servers = [];
+  const start = async () => {
+    const child = spawn(process.execPath, ['server.js', '0'], { env, cwd: new URL('..', import.meta.url) }); servers.push(child);
+    const [output] = await once(child.stdout, 'data'); return output.toString().match(/http:\/\/localhost:\d+/)[0].replace('localhost', '127.0.0.1');
+  };
+  const stop = async child => { if (child.exitCode !== null || child.signalCode !== null) return; const ended = once(child, 'exit'); child.kill(); await ended; };
+  let cookie;
+  const request = async (base, path, method = 'GET', data, auth = cookie, headers = {}) => {
+    const response = await fetch(base + path, { method, headers: { Origin: `https://${new URL(base).host}`, ...(auth ? { Cookie: auth } : {}), ...(data ? { 'Content-Type': 'application/json' } : {}), ...headers }, ...(data ? { body: JSON.stringify(data) } : {}) });
+    const value = await response.json();
+    return { status: response.status, data: value, cookie: response.headers.get('set-cookie')?.split(';')[0], setCookie: response.headers.get('set-cookie') };
+  };
+  try {
+    await db.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);
+    // Only the three runtime demo tables are needed in this isolated schema.
+    await db.$executeRawUnsafe(`CREATE TABLE "${schema}"."DemoState" ("id" TEXT PRIMARY KEY, "payload" JSONB NOT NULL, "updatedAt" TIMESTAMP(3) NOT NULL)`);
+    await db.$executeRawUnsafe(`CREATE TABLE "${schema}"."DemoSession" ("tokenHash" TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "credentialHash" TEXT NOT NULL, "expiresAt" TIMESTAMP(3) NOT NULL)`);
+    await db.$executeRawUnsafe(`CREATE TABLE "${schema}"."DemoUpload" ("filename" TEXT PRIMARY KEY, "mime" TEXT NOT NULL, "content" BYTEA NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+    await seedDatabase(db);
+    const first = await start(); const second = await start();
+    assert.equal((await fetch(first)).status, 200);
+    assert.equal((await request(first, '/api/account', 'GET', null, null)).status, 401);
+    const login = await request(first, '/api/signin', 'POST', { email: 'admin@radius.id', password: 'admin123' }, null);
+    assert.equal(login.status, 200); assert.match(login.setCookie, /Secure/); cookie = login.cookie;
+    assert.equal((await request(second, '/api/session')).data.user.role, 'ADMIN');
+    assert.equal((await request(second, '/api/admin/users/radius-admin', 'PATCH', { name: 'Wrong origin' }, cookie, { Origin: 'https://evil.test' })).status, 403);
+    assert.equal((await request(second, '/api/admin/users/radius-admin', 'PATCH', { name: 'Wrong scheme' }, cookie, { Origin: 'http://radius.test' })).status, 403);
+    const member = await request(second, '/api/signin', 'POST', { email: 'peter@gmail.com', password: '123' }, null);
+    assert.equal(member.status, 200); assert.equal((await request(first, '/api/admin/data', 'GET', null, member.cookie)).status, 403);
+    const initial = (await request(first, '/api/admin/data')).data;
+    const peter = initial.users.find(user => user.email === 'peter@gmail.com');
+    const signup = { email: 'database-signup@example.test', name: 'Database Test', password: '123' };
+    const signups = await Promise.all([request(first, '/api/signup', 'POST', signup, null), request(second, '/api/signup', 'POST', signup, null)]);
+    assert.deepEqual(signups.map(r => r.status).sort(), [200, 409]);
+    const image = await readFile(new URL('../dist/assets/radius-logo.jpg', import.meta.url));
+    const uploaded = await fetch(first + '/api/admin/images', { method: 'POST', headers: { Origin: `https://${new URL(first).host}`, Cookie: cookie, 'Content-Type': 'image/jpeg' }, body: image });
+    assert.equal(uploaded.status, 201); const { imageUrl } = await uploaded.json();
+    assert.deepEqual(Buffer.from(await (await fetch(second + imageUrl)).arrayBuffer()), image);
+    const product = await request(first, '/api/admin/products', 'POST', { name: 'DB Tee', collection: 'Apparel', price: 100000, stock: 3, imageUrl });
+    assert.equal(product.status, 201); assert.ok((await request(second, '/api/catalog')).data.products.some(p => p.id === product.data.id));
+    const order = await request(second, '/api/admin/orders', 'POST', { customerId: peter.id, items: [{ productId: product.data.id, quantity: 1 }], status: 'PAID' });
+    assert.equal(order.status, 201); assert.ok((await request(first, '/api/account', 'GET', null, member.cookie)).data.orderHistory.some(o => o.id === order.data.id));
+    const event = await request(first, '/api/admin/events', 'POST', { name: 'DB Run', category: 'RUN', city: 'Jakarta', startsAt: '2026-12-20', tickets: [{ name: 'Regular', price: 79000, capacity: 1 }] });
+    assert.equal(event.status, 201);
+    const issue = { customerId: peter.id, eventId: event.data.id, type: 'Regular' };
+    const issued = await Promise.all([request(first, '/api/admin/tickets', 'POST', issue), request(second, '/api/admin/tickets', 'POST', issue)]);
+    assert.deepEqual(issued.map(r => r.status).sort(), [201, 409]); const ticket = issued.find(r => r.status === 201).data;
+    assert.equal((await fetch(second + `/api/tickets/${ticket.id}/qr`, { headers: { Cookie: member.cookie } })).status, 200);
+    const scan = { eventId: event.data.id, payload: `RADIUS1:${ticket.checkInToken}` };
+    const scanned = await Promise.all([request(first, '/api/admin/check-in', 'POST', scan), request(second, '/api/admin/check-in', 'POST', scan)]);
+    assert.deepEqual(scanned.map(r => r.status).sort(), [200, 409]);
+    const accepted = scanned.find(r => r.status === 200).data.ticket;
+    assert.ok(accepted.checkedInAt); assert.equal(accepted.checkedInBy, 'radius-admin');
+    assert.equal((await request(second, `/api/admin/tickets/${ticket.id}`, 'PATCH', { status: 'VALID' })).status, 409);
+    await seedDatabase(db);
+    assert.equal((await request(first, '/api/admin/check-in', 'POST', scan)).status, 409);
+    await stop(servers[0]); const restarted = await start();
+    assert.equal((await request(restarted, '/api/session')).status, 200);
+    assert.equal((await request(restarted, '/api/admin/check-in', 'POST', scan)).status, 409);
+    assert.equal((await request(restarted, '/api/admin/data')).data.tickets.find(t => t.id === ticket.id).checkedInAt, accepted.checkedInAt);
+    assert.deepEqual(Buffer.from(await (await fetch(restarted + imageUrl)).arrayBuffer()), image);
+    const reset = await request(restarted, '/api/admin/users/' + peter.id, 'PATCH', { password: '456' }); assert.equal(reset.status, 200);
+    assert.equal((await request(second, '/api/account', 'GET', null, member.cookie)).status, 401);
+    await request(restarted, '/api/signout', 'POST', {});
+    assert.equal((await request(second, '/api/session')).status, 401);
+    assert.equal((await fetch(restarted + '/data/accounts.json')).status, 404);
+  } finally {
+    for (const child of servers) if (child.exitCode === null) await stop(child);
+    await db.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await db.$disconnect();
+  }
+});
