@@ -113,7 +113,8 @@ async (page) => {
     await cp.locator('[data-stop-camera]').waitFor({ state: 'visible' });
     await cp.locator('[data-stop-camera]').click(); check(await cp.locator('[data-scan-video]').isHidden() && (await cp.locator('[data-scan-result]').innerText()).includes('Kamera dihentikan'), 'Stop camera button releases the preview and updates feedback');
     await cp.locator('[data-start-camera]').click(); await cp.locator('[data-stop-camera]').waitFor({ state: 'visible' });
-    await cp.getByRole('button', { name: 'Tutup scanner', exact: true }).click(); await cp.waitForFunction(() => document.activeElement?.hasAttribute('data-open-scanner'));
+    await cp.getByRole('button', { name: 'Tutup scanner', exact: true }).click();
+    await cp.waitForFunction(() => !document.querySelector('[data-scan-video]').srcObject && document.activeElement?.hasAttribute('data-open-scanner'));
     check(await cp.evaluate(() => !document.querySelector('[data-scan-video]').srcObject), 'Close scanner stops an active camera stream');
     await cp.evaluate(() => { navigator.mediaDevices.getUserMedia = async () => { throw new DOMException('Denied', 'NotAllowedError'); }; });
     await cp.locator('[data-open-scanner]').click(); await cp.locator('[name=scanEventId]').selectOption(event.id); await cp.locator('[data-start-camera]').click();
