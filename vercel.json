@@ -9,7 +9,7 @@
   "routes": [
     {
       "src": "^/(.*)$",
-      "dest": "/api/index.js?__radius_path=/$1"
+      "dest": "/api/index?__radius_path=/$1"
     }
   ]
 }
