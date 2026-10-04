@@ -1,4 +1,4 @@
-{
+export const demoOperations = {
   "products": [
     {
       "id": "radius-sock",
@@ -249,4 +249,4 @@
       "notes": ""
     }
   ]
-}
+};

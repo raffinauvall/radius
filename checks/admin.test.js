@@ -1,22 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { once } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { databaseFixture } from './database-fixture.js';
 
-test('Admin authorization, catalog, users, uploads, tickets, orders and JSON persistence', async () => {
-  const temporary = await mkdtemp(join(tmpdir(), 'radius-admin-check-'));
-  const accountsFile = join(temporary, 'accounts.json');
-  await copyFile(new URL('../data/accounts.json', import.meta.url), accountsFile);
+test('Admin authorization, catalog, users, uploads, tickets, orders and database persistence', { skip: !process.env.RADIUS_TEST_DATABASE_URL }, async () => {
+  const fixture = await databaseFixture();
   let server;
   const start = async () => {
-    server = spawn(process.execPath, ['server.js', '0'], { env: { ...process.env, RADIUS_ACCOUNT_FILE: accountsFile, RADIUS_UPLOAD_DIR: join(temporary, 'uploads') }, cwd: new URL('..', import.meta.url) });
-    const [output] = await once(server.stdout, 'data');
-    return output.toString().match(/http:\/\/localhost:\d+/)[0].replace('localhost', '127.0.0.1');
+    const started = await fixture.start(); server = started.child; return started.base;
   };
-  const stop = async () => { const stopped = once(server, 'exit'); server.kill(); await stopped; };
+  const stop = async () => fixture.stop(server);
   let base = await start();
   let adminCookie;
   const request = async (path, method = 'GET', data, cookie = adminCookie, extra = {}) => {
@@ -113,15 +106,15 @@ test('Admin authorization, catalog, users, uploads, tickets, orders and JSON per
     await request(`/api/admin/users/${createdUser.data.id}`, 'PATCH', { status: 'DISABLED' });
     assert.equal((await request('/api/account', 'GET', null, resetLogin.cookie)).status, 401);
     assert.equal((await request('/api/signin', 'POST', { email: createdUser.data.email, password: '456' }, null)).status, 401);
-    const saved = JSON.parse(await readFile(join(temporary, 'operations.json'), 'utf8'));
+    const { operations: saved, accounts: savedAccounts } = await fixture.payload();
     assert.ok(saved.products.some(item => item.id === product.data.id)); assert.equal(saved.orders.find(item => item.id === order.data.id).status, 'CANCELLED');
-    const savedAccounts = JSON.parse(await readFile(accountsFile, 'utf8')); assert.equal(savedAccounts.find(item => item.id === createdUser.data.id).password, undefined);
+    assert.equal(savedAccounts.find(item => item.id === createdUser.data.id).password, undefined);
     await stop(); base = await start();
-    assert.equal((await request('/api/admin/data')).status, 401);
+    assert.equal((await request('/api/admin/data')).status, 200);
     const again = await request('/api/signin', 'POST', { email: 'admin@radius.id', password: 'admin123' }, null); adminCookie = again.cookie;
     const persisted = await request('/api/admin/data'); assert.ok(persisted.data.products.some(item => item.id === product.data.id)); assert.equal(persisted.data.tickets.find(item => item.id === ticket.id).status, 'ATTENDED');
     assert.equal((await request('/api/admin/check-in', 'POST', scan)).status, 409);
     assert.equal(persisted.data.tickets.find(item => item.id === ticket.id).checkInToken, ticket.checkInToken);
     assert.equal((await fetch(base + imageUrl)).status, 200);
-  } finally { await stop(); await rm(temporary, { recursive: true, force: true }); }
+  } finally { await fixture.dispose(); }
 });

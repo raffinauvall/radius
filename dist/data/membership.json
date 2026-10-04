@@ -1,7 +1,0 @@
-{
-  "plans": [
-    { "name": "Radius Community", "price": 0, "interval": null, "description": "Event updates, community access, and selected partner offers." },
-    { "name": "Radius+", "price": 99000, "interval": "month", "description": "Member pricing, priority registration, and member-only events." },
-    { "name": "Radius+ Yearly", "price": 999000, "interval": "year", "description": "A full year of Radius+ at a better annual price." }
-  ]
-}

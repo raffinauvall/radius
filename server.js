@@ -4,13 +4,13 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypt
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import qrcode from 'qrcode-generator';
-import { state, withState, commit, usesDatabase, getSession, putSession, deleteSession, deleteUserSessions, saveImage, readImage } from './storage.js';
+import { state, withState, commit, getSession, putSession, deleteSession, deleteUserSessions, saveImage, readImage } from './storage.js';
 
 const project = dirname(fileURLToPath(import.meta.url));
 const publicRoot = resolve(project, 'dist');
 const sessionAge = 8 * 60 * 60;
 const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
-const publicUser = ({ id, email, name, role = 'USER', status = 'ACTIVE', membershipPlan = 'COMMUNITY', membershipRenewalDate = null, createdAt }) => ({ id, email, name, role, status, membershipPlan, membershipRenewalDate, createdAt });
+const publicUser = ({ id, email, name, phone = '', role = 'USER', status = 'ACTIVE', membershipPlan = 'COMMUNITY', membershipRenewalDate = null, membershipCancelAtEnd = false, createdAt }) => ({ id, email, name, phone, role, status, membershipPlan, membershipRenewalDate, membershipCancelAtEnd, createdAt });
 const cookie = (token, age = sessionAge) => `radius_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${process.env.VERCEL ? '; Secure' : ''}`;
 const tokenFrom = req => req.headers.cookie?.split(';').map(part => part.trim()).find(part => part.startsWith('radius_session='))?.slice('radius_session='.length);
 const send = (res, status, data, headers = {}) => {
@@ -39,14 +39,6 @@ function passwordMatches(password, saved) {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 const hashPassword = password => { const salt = randomBytes(16).toString('hex'); return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`; };
-if (!usesDatabase && state()?.operations.tickets.some(ticket => !ticket.checkInToken || ticket.entryConsumed === undefined)) {
-  await commit('operations', store => {
-    for (const ticket of store.tickets) {
-      ticket.checkInToken ||= randomBytes(32).toString('hex');
-      ticket.entryConsumed = Boolean(ticket.entryConsumed || ticket.status === 'ATTENDED');
-    }
-  });
-}
 function assertAdminUnchanged(admin) {
   const current = state().accounts.find(user => user.id === admin.id);
   if (!current || current.status === 'DISABLED' || current.role !== 'ADMIN' || current.passwordHash !== admin.passwordHash) throw fail(403, 'Akses admin berubah. Silakan sign in kembali.');
@@ -113,11 +105,10 @@ async function bodyJSON(req) {
   try { const data = JSON.parse(body); if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(); return data; } catch { throw fail(400, 'Data tidak valid.'); }
 }
 async function accountData(user) {
-  const fixture = JSON.parse(await readFile(resolve(project, 'data/customer.json'), 'utf8'));
   const tickets = state().operations.tickets.filter(ticket => ticket.customerId === user.id);
   const orderHistory = state().operations.orders.filter(order => order.customerId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ notes, ...order }) => ({ ...order, item: order.items.map(item => item.name).join(', '), quantity: order.items.reduce((n, item) => n + item.quantity, 0) }));
-  const paid = user.membershipPlan === 'PLUS' || user.membershipPlan === 'YEARLY';
-  const membership = paid ? { ...fixture.membership, name: user.membershipPlan === 'YEARLY' ? 'Radius+ Yearly' : 'Radius+', price: user.membershipPlan === 'YEARLY' ? 999000 : 99000, interval: user.membershipPlan === 'YEARLY' ? 'tahun' : 'bulan', renewalDate: user.membershipRenewalDate ? dateID(user.membershipRenewalDate) : null } : { name: 'Radius Community', price: 0, renewalDate: null, benefits: [{ title: 'Event updates', description: 'Informasi event Radius berikutnya.' }, { title: 'Community access', description: 'Akses ke komunitas Radius.' }, { title: 'Partner offers', description: 'Penawaran partner untuk komunitas Radius.' }] };
+  const plan = state().membership.plans.find(plan => plan.key === (user.membershipPlan || 'COMMUNITY'));
+  const membership = { ...plan, interval: plan.interval === 'year' ? 'tahun' : plan.interval === 'month' ? 'bulan' : null, renewalDate: user.membershipRenewalDate ? dateID(user.membershipRenewalDate) : null };
   return { ...publicUser(user), eventsAttended: tickets.filter(ticket => ticket.status === 'ATTENDED').length, ticketsPurchased: tickets.length, orders: orderHistory.length, tickets, orderHistory, membership };
 }
 async function adminUser(req) {
@@ -268,9 +259,28 @@ async function handleRequest(req, res) {
       const protocol = process.env.VERCEL ? 'https' : 'http';
       if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin && req.headers.origin !== `${protocol}://${req.headers.host}`) throw fail(403, 'Request tidak diizinkan.');
       if (path.startsWith('/api/admin/')) return await handleAdmin(req, res, path);
-      if (req.method === 'GET' && path === '/api/catalog') return send(res, 200, { products: state().operations.products.filter(product => product.active && !product.archived), events: state().operations.events.filter(event => event.active && !event.archived), membership: JSON.parse(await readFile(resolve(publicRoot, 'data/membership.json'), 'utf8')) });
+      if (req.method === 'GET' && path === '/api/catalog') return send(res, 200, { products: state().operations.products.filter(product => product.active && !product.archived), events: state().operations.events.filter(event => event.active && !event.archived), membership: state().membership });
       if (req.method === 'GET' && path === '/api/session') return send(res, 200, { user: publicUser(await signedIn(req)) });
       if (req.method === 'GET' && path === '/api/account') return send(res, 200, await accountData(await signedIn(req)));
+      if (req.method === 'PATCH' && ['/api/account/profile', '/api/account/membership'].includes(path)) {
+        const user = await signedIn(req);
+        const data = await bodyJSON(req);
+        const updated = await commit('accounts', accounts => {
+          const current = accounts.find(account => account.id === user.id);
+          if (!current || current.status === 'DISABLED' || current.passwordHash !== user.passwordHash) throw fail(401, 'Silakan sign in kembali.');
+          if (path.endsWith('/profile')) {
+            current.name = textField(data.name, 'Nama lengkap', 80);
+            current.phone = textField(data.phone, 'Nomor WhatsApp', 25, true);
+          } else {
+            if (typeof data.cancelAtEnd !== 'boolean') throw fail(400, 'Pengaturan perpanjangan tidak valid.');
+            if (!['PLUS', 'YEARLY'].includes(current.membershipPlan)) throw fail(400, 'Akun ini belum memiliki Radius+.');
+            current.membershipCancelAtEnd = data.cancelAtEnd;
+          }
+          current.updatedAt = new Date().toISOString();
+          return current;
+        });
+        return send(res, 200, await accountData(updated));
+      }
       const qrRoute = path.match(/^\/api\/tickets\/([\w-]+)\/qr$/);
       if (req.method === 'GET' && qrRoute) return await ticketQR(req, res, qrRoute[1]);
       if (req.method !== 'POST') throw fail(404, 'Endpoint tidak ditemukan.');

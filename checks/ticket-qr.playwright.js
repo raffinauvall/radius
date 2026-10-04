@@ -44,7 +44,7 @@ async (page) => {
     await upload(first); await scanText().filter({ hasText: 'event lain' }).waitFor(); check(true, 'Real downloaded QR rejects the wrong event');
     await ap.locator('[name=scanEventId]').selectOption(event.id);
     await upload(first); await scanText().filter({ hasText: 'Check-in berhasil' }).waitFor();
-    check((await scanText().innerText()).includes('Andreas Peterang'), 'Downloaded PNG decodes and checks in the correct participant');
+    check((await scanText().innerText()).includes(peter.name), 'Downloaded PNG decodes and checks in the correct participant');
     const after = await (await admin.request.get(`${base}/api/admin/data`)).json(); const used = after.tickets.find(t => t.id === tickets[0].id);
     check(used.entryConsumed && used.status === 'ATTENDED' && used.checkedInAt && used.checkedInBy, 'Check-in stores a permanent consumed flag, timestamp and admin');
     await upload(first); await scanText().filter({ hasText: 'sudah dipakai' }).waitFor(); check(true, 'Same PNG cannot be scanned twice');

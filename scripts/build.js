@@ -11,7 +11,7 @@ const run = args => {
   if (result.error || result.status !== 0) throw new Error('Prisma command failed.');
 };
 try {
-  if (!generateOnly && process.env.VERCEL && !databaseURL) throw new Error('Set DATABASE_URL in Vercel for this deployment environment.');
+  if (!generateOnly && !databaseURL) throw new Error('Set DATABASE_URL before building or setting up the database.');
   run(['generate']);
   if (!generateOnly && databaseURL) {
     run(['migrate', 'deploy']);
@@ -20,6 +20,6 @@ try {
     console.log('Database ready. Existing demo state preserved.');
   }
 } catch (error) {
-  console.error(error.message === 'Set DATABASE_URL in Vercel for this deployment environment.' ? error.message : 'Database build failed. Check env scope, connection and migration logs.');
+  console.error(error.message === 'Set DATABASE_URL before building or setting up the database.' ? error.message : 'Database build failed. Check env scope, connection and migration logs.');
   process.exitCode = 1;
 } finally { if (database) await database.$disconnect(); }

@@ -32,7 +32,7 @@ async (page) => {
     await test.locator('input[name=password]').fill('123');
     await test.getByRole('button', { name: 'Sign in', exact: true }).click();
     await test.locator('.event-pass').waitFor();
-    check((await test.locator('h1').innerText()).includes('Andreas Peterang'), 'JSON credentials load Andreas Peterang');
+    check((await test.locator('h1').innerText()).includes('Andreas Peterang'), 'Database credentials load Andreas Peterang');
     const cookies = await context.cookies();
     check(cookies.some(cookie => cookie.name === 'radius_session' && cookie.httpOnly), 'Server issues an HttpOnly session cookie');
     check((await context.request.get(`${base}/data/accounts.json`)).status() === 404, 'Private credentials JSON is not publicly served');
@@ -62,20 +62,46 @@ async (page) => {
     check(await test.locator('dialog').evaluate(el => !el.open), 'Renewal confirmation can be cancelled');
     await test.locator('[data-renewal]').click();
     await test.locator('[data-confirm-renewal]').click();
+    await test.locator('dialog').waitFor({ state: 'hidden' });
     check((await test.locator('.membership-settings').innerText()).includes('Nonaktif'), 'Renewal setting changes after confirmation');
     await view('overview');
     check((await test.locator('.membership-summary').innerText()).includes('Aktif sampai'), 'Overview reflects the changed renewal setting');
+    await view('membership');
+    await test.route('**/api/account/membership', route => route.fulfill({ status: 503, json: { error: 'Pengaturan gagal disimpan. Coba lagi.' } }));
+    await test.locator('[data-renewal]').click();
+    await test.locator('[data-confirm-renewal]').click();
+    await test.getByText('Pengaturan gagal disimpan. Coba lagi.', { exact: true }).waitFor();
+    check(await test.locator('dialog').evaluate(el => el.open), 'Failed membership save keeps confirmation open for retry');
+    check((await context.request.get(`${base}/api/account`).then(r => r.json())).membershipCancelAtEnd === true, 'Failed membership save leaves database preference unchanged');
+    await test.unroute('**/api/account/membership');
+    await test.locator('[data-close-dialog]').last().click();
     await view('profile');
     await test.locator('input[name=name]').fill('   ');
     await test.locator('button[type=submit]').click();
     check(await test.locator('input[name=name]').evaluate(el => !el.validity.valid), 'Blank profile name is rejected');
     const name = 'Radius Member '.repeat(6).trim().slice(0, 80);
+    await test.route('**/api/account/profile', route => route.fulfill({ status: 503, json: { error: 'Perubahan gagal disimpan. Coba lagi.' } }));
+    await test.locator('input[name=name]').fill('Unsaved name');
+    await test.locator('button[type=submit]').click();
+    await test.getByText('Perubahan gagal disimpan. Coba lagi.', { exact: true }).waitFor();
+    check(await test.locator('button[type=submit]').isEnabled(), 'Failed profile save gives feedback and permits retry');
+    check((await context.request.get(`${base}/api/account`).then(r => r.json())).name === 'Andreas Peterang', 'Failed profile save does not change the database name');
+    await test.unroute('**/api/account/profile');
     await test.locator('input[name=name]').fill(name);
     await test.locator('input[name=phone]').fill('08123456789');
     await test.locator('button[type=submit]').click();
+    await test.getByText('Perubahan tersimpan.', { exact: true }).waitFor();
     await test.reload();
     await test.locator('[data-profile-form]').waitFor();
     check(await test.locator('input[name=name]').inputValue() === name, 'Profile changes persist after reload');
+    const other = await page.context().browser().newContext();
+    try {
+      await other.request.post(`${base}/api/signin`, { data: { email: 'peter@gmail.com', password: '123' } });
+      const saved = await other.request.get(`${base}/api/account`).then(r => r.json());
+      check(saved.name === name && saved.phone === '08123456789', 'Profile is available in a separate browser context without localStorage');
+      check(saved.membershipCancelAtEnd === true, 'Membership preference is available in a separate browser context');
+      await other.request.post(`${base}/api/signout`, { data: {} });
+    } finally { await other.close(); }
     for (const width of [320, 390, 768, 960, 1280, 1440]) {
       await test.setViewportSize({ width, height: 900 });
       for (const key of ['overview', 'tickets', 'orders', 'membership', 'profile']) {
@@ -108,7 +134,7 @@ async (page) => {
     await test.route('**/api/account', route => route.fulfill({ status: 503, body: 'Unavailable' }));
     await test.goto(`${base}/account.html`);
     await test.locator('[data-retry]').waitFor();
-    check((await test.locator('main').innerText()).includes('Akun belum bisa dimuat'), 'Failed JSON load shows a retry action');
+    check((await test.locator('main').innerText()).includes('Akun belum bisa dimuat'), 'Failed account API load shows a retry action');
     await test.unroute('**/api/account');
     await test.locator('[data-retry]').click();
     await test.locator('.event-pass').waitFor();

@@ -1,5 +1,6 @@
-import { readFile } from 'node:fs/promises';
 import { randomBytes, scryptSync } from 'node:crypto';
+import { demoOperations } from './demo-data.js';
+import { membershipSeed } from './membership-seed.js';
 
 export function demoAccounts() {
   const hash = password => {
@@ -13,13 +14,17 @@ export function demoAccounts() {
   ];
 }
 export async function demoPayload() {
-  const operations = JSON.parse(await readFile(new URL('./data/operations.seed.json', import.meta.url), 'utf8'));
+  const operations = structuredClone(demoOperations);
   for (const ticket of operations.tickets) {
     ticket.checkInToken = randomBytes(32).toString('hex');
     ticket.entryConsumed = ticket.status === 'ATTENDED';
   }
-  return { accounts: demoAccounts(), operations };
+  return { accounts: demoAccounts(), operations, membership: structuredClone(membershipSeed) };
 }
 export async function seedDatabase(database) {
   await database.demoState.createMany({ data: [{ id: 'radius-demo', payload: await demoPayload() }], skipDuplicates: true });
+  await database.$transaction(async tx => {
+    const [record] = await tx.$queryRaw`SELECT "payload" FROM "DemoState" WHERE "id" = 'radius-demo' FOR UPDATE`;
+    if (!record.payload.membership) await tx.demoState.update({ where: { id: 'radius-demo' }, data: { payload: { ...record.payload, membership: structuredClone(membershipSeed) } } });
+  });
 }

@@ -2,9 +2,6 @@ const root = document.querySelector('[data-account-root]');
 const dialog = document.querySelector('[data-member-dialog]');
 const escapeHTML = (value) => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 const money = value => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(value);
-const readLocal = key => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } };
-let session;
-let profileKey;
 let customer;
 let ticketFilter = 'all';
 let toastTimer;
@@ -28,7 +25,13 @@ const pageHead = (title, description, action = '') => `<div class="member-page-h
 const sectionHead = (title, link, label) => `<div class="member-section-heading"><h2>${title}</h2>${link ? `<a class="member-text-action" href="${link}">${label}</a>` : ''}</div>`;
 const ticketRows = tickets => tickets.map(ticket => `<li class="member-list-row"><div class="row-date"><strong>${escapeHTML(ticket.day)}</strong><span>${escapeHTML(ticket.month)}</span></div><div class="row-description"><strong>${escapeHTML(ticket.event)}</strong><span>${escapeHTML(ticket.city)} · ${escapeHTML(ticket.type)}</span></div>${badge(ticket.status)}<button class="member-outline-button" type="button" data-ticket="${escapeHTML(ticket.id)}">Detail tiket</button></li>`).join('');
 const orderRows = orders => orders.map(order => `<li class="member-list-row"><div class="order-symbol">${icon('orders')}</div><div class="row-description"><strong>${escapeHTML(order.item)}</strong><span>${escapeHTML(order.id)} · ${escapeHTML(order.date)}</span></div><span class="order-total">${money(order.total)}</span>${badge(order.status)}<button class="member-outline-button" type="button" data-order="${escapeHTML(order.id)}">Detail order</button></li>`).join('');
-const person = () => ({ ...customer, ...session, ...(readLocal(profileKey) || {}) });
+const person = () => customer;
+async function saveAccount(path, data) {
+  const response = await fetch(path, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Perubahan gagal disimpan. Coba lagi.');
+  customer = result;
+}
 
 function updateIdentity() {
   const user = person();
@@ -41,7 +44,7 @@ function overview() {
   const next = customer.tickets.find(ticket => ticket.status === 'VALID');
   const later = customer.tickets.filter(ticket => ticket.status === 'VALID' && ticket !== next);
   const order = customer.orderHistory[0];
-  const paused = readLocal(`radius_membership:${session.email}`)?.cancelAtEnd;
+  const paused = customer.membershipCancelAtEnd;
   return pageHead(`Hai, ${user.name}.`, 'Siap untuk ketemu di run berikutnya?', '<a class="member-text-action" href="/index.html#events">Cari event berikutnya</a>') +
     `<div class="account-overview"><div class="overview-tickets"><section>${sectionHead('Tiket terdekat', '#tickets', 'Semua tiket')}${next ? `<article class="event-pass"><div class="pass-date"><strong>${escapeHTML(next.day)}</strong><span>${escapeHTML(next.month)}</span><small>${escapeHTML(next.date.split(' ').at(-1))}</small></div><div class="pass-content"><div class="pass-context"><span>${escapeHTML(next.partner)}</span>${badge(next.status)}</div><h2>${escapeHTML(next.event)}</h2><p>${escapeHTML(next.date)}<br />${escapeHTML(next.city)} · ${escapeHTML(next.distance)}</p><div class="pass-bottom"><div><strong>${escapeHTML(next.type)}</strong><small>${escapeHTML(next.code)}</small></div><button class="member-button" type="button" data-ticket="${escapeHTML(next.id)}">Buka tiket</button></div></div></article>` : empty('Belum ada tiket berikutnya', 'Cari event Radius dan pilih kegiatan berikutnya.')}</section><section class="later-events">${sectionHead('Jadwal berikutnya')}${later.length ? `<ul class="member-data-list">${ticketRows(later)}</ul>` : '<p class="section-note">Belum ada event lain yang kamu ikuti.</p>'}<a class="member-text-action" href="#tickets">Lihat tiket dan riwayat kehadiran</a></section><p class="account-history">${customer.eventsAttended} event dihadiri · ${customer.ticketsPurchased} tiket dibeli · ${customer.orders} pesanan merch</p></div><aside class="account-summary" aria-label="Ringkasan akun"><section class="membership-summary">${sectionHead('Membership')}${badge(paused && customer.membership.price ? 'Berakhir segera' : 'Aktif')}<h2>${escapeHTML(customer.membership.name)}</h2><p>${customer.membership.price ? `${paused ? 'Aktif sampai' : 'Perpanjangan berikutnya'}<br /><strong>${escapeHTML(customer.membership.renewalDate)}</strong>` : 'Paket gratis.<br />Tidak ada tagihan berkala.'}</p><a class="member-text-action" href="#membership">Benefit dan pengaturan</a></section><section class="latest-order">${sectionHead('Pesanan terakhir')}${order ? `<div class="last-order-status">${badge(order.status)}<span>${escapeHTML(order.date)}</span></div><h3>${escapeHTML(order.item)}</h3><p>${escapeHTML(order.id)}</p><div class="last-order-bottom"><strong>${money(order.total)}</strong><button class="member-outline-button" type="button" data-order="${escapeHTML(order.id)}">Detail order</button></div><a class="member-text-action" href="#orders">Semua pesanan</a>` : '<p class="section-note">Belum ada pesanan merch.</p><a class="member-text-action" href="/index.html#shop">Lihat shop</a>'}</section></aside></div>`;
 }
@@ -59,7 +62,7 @@ function orders() {
 }
 
 function membership() {
-  const paused = readLocal(`radius_membership:${session.email}`)?.cancelAtEnd;
+  const paused = customer.membershipCancelAtEnd;
   const paid = customer.membership.price > 0;
   return pageHead('Membership', 'Benefit dan informasi paket kamu.') +
     `<div class="member-overview-grid"><section class="member-surface membership-settings">${badge(paused && paid ? 'Berakhir segera' : 'Aktif')}<h2>${escapeHTML(customer.membership.name)}</h2><p>${paid ? `${money(customer.membership.price)} / ${escapeHTML(customer.membership.interval || 'bulan')}` : 'Gratis. Tidak ada tagihan berkala.'}</p>${paid ? `<dl class="member-detail-list"><div><dt>${paused ? 'Aktif sampai' : 'Perpanjangan'}</dt><dd>${escapeHTML(customer.membership.renewalDate)}</dd></div><div><dt>Perpanjangan otomatis</dt><dd>${paused ? 'Nonaktif' : 'Aktif'}</dd></div></dl><button class="member-outline-button" type="button" data-renewal>${paused ? 'Aktifkan perpanjangan' : 'Kelola perpanjangan'}</button>` : '<a class="member-text-action" href="/index.html#membership">Lihat pilihan membership</a>'}</section><section class="member-surface membership-benefits">${sectionHead(`Benefit ${escapeHTML(customer.membership.name)}`)}<ul class="member-benefits">${customer.membership.benefits.map(b => `<li><span aria-hidden="true">✓</span><div><strong>${escapeHTML(b.title)}</strong><p>${escapeHTML(b.description)}</p></div></li>`).join('')}</ul><a class="member-text-action" href="/index.html#events">Lihat event yang tersedia</a></section></div>`;
@@ -185,32 +188,38 @@ document.addEventListener('click', async event => {
   }
   if (button.hasAttribute('data-print')) window.print();
   if (button.hasAttribute('data-renewal')) {
-    const paused = readLocal(`radius_membership:${session.email}`)?.cancelAtEnd;
+    const paused = customer.membershipCancelAtEnd;
     openDetail('Perpanjangan Radius+', `<p>${paused ? 'Aktifkan kembali perpanjangan Radius+?' : `Hentikan perpanjangan otomatis? Benefit tetap aktif sampai ${escapeHTML(customer.membership.renewalDate)}.`}</p><div class="dialog-actions"><button class="member-outline-button" type="button" data-close-dialog>Kembali</button><button class="member-button" type="button" data-confirm-renewal>${paused ? 'Aktifkan perpanjangan' : 'Hentikan perpanjangan'}</button></div>`);
   }
   if (button.hasAttribute('data-confirm-renewal')) {
-    const key = `radius_membership:${session.email}`;
+    button.disabled = true;
+    button.textContent = 'Menyimpan...';
     try {
-      localStorage.setItem(key, JSON.stringify({ cancelAtEnd: !readLocal(key)?.cancelAtEnd }));
+      await saveAccount('/api/account/membership', { cancelAtEnd: !customer.membershipCancelAtEnd });
       dialog.close(); render(); root.querySelector('[data-renewal]').focus(); toast('Pengaturan perpanjangan diperbarui.');
-    } catch { toast('Pengaturan gagal disimpan. Coba lagi.'); }
+    } catch (error) { toast(error.message); }
+    finally { button.disabled = false; button.textContent = customer.membershipCancelAtEnd ? 'Aktifkan perpanjangan' : 'Hentikan perpanjangan'; }
   }
   if (button.hasAttribute('data-retry')) loadAccount();
 });
 
-document.addEventListener('submit', event => {
+document.addEventListener('submit', async event => {
   if (!event.target.matches('[data-profile-form]')) return;
   event.preventDefault();
   const form = event.target;
   const name = form.elements.name.value.trim();
   if (!name) { form.elements.name.setCustomValidity('Isi nama lengkap.'); form.elements.name.reportValidity(); return; }
+  const button = form.querySelector('button[type=submit]');
+  button.disabled = true;
+  form.querySelector('[data-profile-message]').textContent = 'Menyimpan perubahan...';
   try {
-    localStorage.setItem(profileKey, JSON.stringify({ name, phone: form.elements.phone.value.trim() }));
+    await saveAccount('/api/account/profile', { name, phone: form.elements.phone.value.trim() });
     updateIdentity();
     document.querySelector('.profile-intro h2').textContent = name;
     document.querySelector('.avatar-large').textContent = name.slice(0, 1).toUpperCase();
     form.querySelector('[data-profile-message]').textContent = 'Perubahan tersimpan.';
-  } catch { form.querySelector('[data-profile-message]').textContent = 'Perubahan gagal disimpan. Coba lagi.'; }
+  } catch (error) { form.querySelector('[data-profile-message]').textContent = error.message; }
+  finally { button.disabled = false; }
 });
 document.addEventListener('input', event => { if (event.target.name === 'name') event.target.setCustomValidity(''); });
 window.addEventListener('hashchange', () => { render(); root.focus({ preventScroll: true }); window.scrollTo({ top: 0, behavior: 'instant' }); });
@@ -223,8 +232,6 @@ async function loadAccount() {
     const sessionResponse = await fetch('/api/session', { cache: 'no-store' });
     if (sessionResponse.status === 401) { localStorage.removeItem('radius_session'); location.replace('/signin.html'); return; }
     if (!sessionResponse.ok) throw new Error('Session unavailable');
-    session = (await sessionResponse.json()).user;
-    profileKey = `radius_profile:${session.email}`;
     const response = await fetch('/api/account', { cache: 'no-store' });
     if (!response.ok) throw new Error('Account unavailable');
     customer = await response.json();
