@@ -1,5 +1,7 @@
 const authForm = document.querySelector('[data-auth-form]');
 const authMessage = document.querySelector('[data-auth-message]');
+const nextPath = new URLSearchParams(location.search).get('next');
+if (nextPath && nextPath.startsWith('/') && !nextPath.startsWith('//')) document.querySelectorAll('[data-auth-link]').forEach(link => { link.href += `?next=${encodeURIComponent(nextPath)}`; });
 
 authForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -17,7 +19,8 @@ authForm?.addEventListener('submit', async (event) => {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Akun belum bisa diakses.');
     localStorage.removeItem('radius_session');
-    window.location.href = result.user.role === 'ADMIN' ? '/admin.html?v=1' : '/account.html?v=8';
+    const destination = nextPath && nextPath.startsWith('/') && !nextPath.startsWith('//') ? new URL(nextPath, location.origin) : null;
+    window.location.href = destination?.origin === location.origin ? `${destination.pathname}${destination.search}${destination.hash}` : result.user.role === 'ADMIN' ? '/admin.html?v=1' : '/account.html?v=8';
   } catch (error) {
     authMessage.textContent = error.message === 'Failed to fetch' ? 'Koneksi ke server terputus. Coba lagi.' : error.message;
     authMessage.className = 'auth-message auth-error';

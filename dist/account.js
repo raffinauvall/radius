@@ -19,7 +19,7 @@ const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 const views = { overview: 'Overview', tickets: 'My tickets', orders: 'My orders', membership: 'Membership', profile: 'Profile' };
 document.querySelector('#member-nav').innerHTML = Object.entries(views).map(([key, label]) => `<a href="#${key}" data-nav="${key}">${icon(key)}<span>${label}</span></a>`).join('');
 
-const badge = status => `<span class="member-badge ${status === 'ATTENDED' || status === 'DELIVERED' ? 'badge-neutral' : ''}">${escapeHTML({ VALID: 'Upcoming', ATTENDED: 'Attended', DELIVERED: 'Delivered', SHIPPED: 'Shipped', CANCELLED: 'Cancelled', PENDING: 'Pending', PAID: 'Paid', PROCESSING: 'Processing' }[status] || status)}</span>`;
+const badge = status => `<span class="member-badge ${status === 'ATTENDED' || status === 'DELIVERED' ? 'badge-neutral' : ''}">${escapeHTML({ VALID: 'Upcoming', ATTENDED: 'Attended', DELIVERED: 'Delivered', SHIPPED: 'Shipped', CANCELLED: 'Cancelled', PENDING: 'Pending', PAID: 'Paid', PROCESSING: 'Processing', DEMO: 'Demo · belum dibayar' }[status] || status)}</span>`;
 const empty = (title, message, link = '/index.html#events', label = 'Lihat event') => `<div class="member-state"><h2>${title}</h2><p>${message}</p><a class="member-button" href="${link}">${label}</a></div>`;
 const pageHead = (title, description, action = '') => `<div class="member-page-heading"><div><h1>${escapeHTML(title)}</h1><p>${escapeHTML(description)}</p></div>${action}</div>`;
 const sectionHead = (title, link, label) => `<div class="member-section-heading"><h2>${title}</h2>${link ? `<a class="member-text-action" href="${link}">${label}</a>` : ''}</div>`;

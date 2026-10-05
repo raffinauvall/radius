@@ -106,7 +106,7 @@ async function bodyJSON(req) {
 }
 async function accountData(user) {
   const tickets = state().operations.tickets.filter(ticket => ticket.customerId === user.id);
-  const orderHistory = state().operations.orders.filter(order => order.customerId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ notes, ...order }) => ({ ...order, item: order.items.map(item => item.name).join(', '), quantity: order.items.reduce((n, item) => n + item.quantity, 0) }));
+  const orderHistory = state().operations.orders.filter(order => order.customerId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ notes, requestId, ...order }) => ({ ...order, item: order.items.map(item => item.name).join(', '), quantity: order.items.reduce((n, item) => n + item.quantity, 0) }));
   const plan = state().membership.plans.find(plan => plan.key === (user.membershipPlan || 'COMMUNITY'));
   const membership = { ...plan, interval: plan.interval === 'year' ? 'tahun' : plan.interval === 'month' ? 'bulan' : null, renewalDate: user.membershipRenewalDate ? dateID(user.membershipRenewalDate) : null };
   return { ...publicUser(user), eventsAttended: tickets.filter(ticket => ticket.status === 'ATTENDED').length, ticketsPurchased: tickets.length, orders: orderHistory.length, tickets, orderHistory, membership };
@@ -245,7 +245,7 @@ async function handleAdmin(req, res, path) {
       });
       if (new Set(items.map(item => item.productId)).size !== items.length) throw fail(400, 'Gabungkan jumlah untuk produk yang sama.');
       const createdAt = previous?.createdAt || now;
-      record = { ...previous, id: previous?.id || `RAD-ORD-${randomBytes(4).toString('hex').toUpperCase()}`, customerId, items, total: integer(items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0), 'Total order'), status: choice(draft.status || 'PENDING', ['PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED'], 'Status order'), address: textField(draft.address, 'Alamat', 1000), tracking: textField(draft.tracking, 'Nomor resi', 100), notes: textField(draft.notes, 'Catatan', 2000), createdAt, date: previous?.date || dateID(createdAt), updatedAt: now };
+      record = { ...previous, id: previous?.id || `RAD-ORD-${randomBytes(4).toString('hex').toUpperCase()}`, customerId, items, total: integer(items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0), 'Total order'), status: choice(draft.status || 'PENDING', ['DEMO', 'PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED'], 'Status order'), address: textField(draft.address, 'Alamat', 1000), tracking: textField(draft.tracking, 'Nomor resi', 100), notes: textField(draft.notes, 'Catatan', 2000), createdAt, date: previous?.date || dateID(createdAt), updatedAt: now };
     }
     if (previous) list[list.indexOf(previous)] = record; else list.unshift(record);
     return record;
@@ -262,6 +262,28 @@ async function handleRequest(req, res) {
       if (req.method === 'GET' && path === '/api/catalog') return send(res, 200, { products: state().operations.products.filter(product => product.active && !product.archived), events: state().operations.events.filter(event => event.active && !event.archived), membership: state().membership });
       if (req.method === 'GET' && path === '/api/session') return send(res, 200, { user: publicUser(await signedIn(req)) });
       if (req.method === 'GET' && path === '/api/account') return send(res, 200, await accountData(await signedIn(req)));
+      if (req.method === 'POST' && path === '/api/shop/orders') {
+        const user = await signedIn(req);
+        const data = await bodyJSON(req);
+        const productId = textField(data.productId, 'Produk', 100, true);
+        const quantity = integer(data.quantity, 'Jumlah produk', 1);
+        const address = textField(data.address, 'Alamat pengiriman', 1000, true);
+        const requestId = textField(data.requestId, 'ID checkout', 36, true);
+        if (!/^[a-f\d-]{36}$/i.test(requestId)) throw fail(400, 'Checkout tidak valid. Coba lagi.');
+        const order = await commit('operations', store => {
+          const existing = store.orders.find(order => order.customerId === user.id && order.requestId === requestId);
+          if (existing) return existing;
+          const product = store.products.find(product => product.id === productId && product.active && !product.archived);
+          if (!product) throw fail(404, 'Produk ini sudah tidak tersedia.');
+          if (quantity > 1000 || (product.stock !== null && quantity > product.stock)) throw fail(409, 'Jumlah melebihi stok yang tersedia.');
+          const now = new Date().toISOString();
+          const record = { id: `RAD-ORD-${randomBytes(4).toString('hex').toUpperCase()}`, customerId: user.id, items: [{ productId, name: product.name, quantity, unitPrice: product.price }], total: product.price * quantity, status: 'DEMO', address, tracking: '', notes: 'Checkout demo. Pembayaran tidak diproses.', requestId, createdAt: now, date: dateID(now), updatedAt: now };
+          store.orders.unshift(record);
+          return record;
+        });
+        const { notes, requestId: _, ...publicOrder } = order;
+        return send(res, 201, { order: publicOrder, paymentProcessed: false });
+      }
       if (req.method === 'PATCH' && ['/api/account/profile', '/api/account/membership'].includes(path)) {
         const user = await signedIn(req);
         const data = await bodyJSON(req);

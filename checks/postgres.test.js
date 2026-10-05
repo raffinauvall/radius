@@ -42,6 +42,14 @@ test('PostgreSQL sessions, uploads, admin data and one-use tickets across server
     assert.equal((await request(second, '/api/admin/users/radius-admin', 'PATCH', { name: 'Wrong scheme' }, cookie, { Origin: 'http://radius.test' })).status, 403);
     const member = await request(second, '/api/signin', 'POST', { email: 'peter@gmail.com', password: '123' }, null);
     assert.equal(member.status, 200); assert.equal((await request(first, '/api/admin/data', 'GET', null, member.cookie)).status, 403);
+    const checkout = { productId: 'radius-tee', quantity: 2, address: 'Jl. Demo 10, Jakarta', requestId: '123e4567-e89b-42d3-a456-426614174000' };
+    assert.equal((await request(first, '/api/shop/orders', 'POST', checkout, null)).status, 401);
+    const demoOrder = await request(first, '/api/shop/orders', 'POST', checkout, member.cookie);
+    assert.equal(demoOrder.status, 201); assert.equal(demoOrder.data.order.status, 'DEMO'); assert.equal(demoOrder.data.order.total, 598000); assert.equal(demoOrder.data.paymentProcessed, false);
+    assert.equal((await request(second, '/api/shop/orders', 'POST', checkout, member.cookie)).data.order.id, demoOrder.data.order.id);
+    const memberOrders = await request(second, '/api/account', 'GET', null, member.cookie);
+    assert.ok(memberOrders.data.orderHistory.some(order => order.id === demoOrder.data.order.id));
+    assert.equal('requestId' in memberOrders.data.orderHistory.find(order => order.id === demoOrder.data.order.id), false);
     assert.equal((await request(first, '/api/account/profile', 'PATCH', { name: 'Guest', phone: '' }, null)).status, 401);
     assert.equal((await request(first, '/api/account/profile', 'PATCH', { name: ' ', phone: '' }, member.cookie)).status, 400);
     const profile = await request(first, '/api/account/profile', 'PATCH', { name: 'Andreas DB', phone: '08123456789', role: 'ADMIN', email: 'other@example.test' }, member.cookie);
