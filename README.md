@@ -17,7 +17,7 @@ Buka `http://localhost:4176`. Gunakan Node.js 22, tanpa Python. Isi `.env` dari 
 ## Deploy demo ke Vercel
 
 1. Hubungkan repo ini ke project Vercel dengan environment `DATABASE_URL` untuk runtime dan `DATABASE_URL_UNPOOLED` untuk migration. Pilih scope Production; gunakan database terpisah jika Preview juga diaktifkan.
-2. Deploy ulang setelah perubahan environment. Vercel mendeteksi `server.ts` di root sebagai entrypoint Node dan menjalankan `npm run build` sebelum deploy.
+2. Deploy ulang setelah perubahan environment. Vercel menjalankan `npm run build`, menyajikan output `dist`, dan meneruskan request ke handler Node di `api/index.js`.
 3. Build menghasilkan Prisma Client, menjalankan migration yang belum diterapkan, dan membuat akun/data contoh jika belum ada. Build berikutnya mempertahankan data, hash password, token tiket, gambar, dan status check-in.
 
 Build harus bisa mengakses PostgreSQL. Jangan menggunakan file JSON atau folder upload lokal sebagai penyimpanan Vercel. Nilai connection string tetap di environment, tidak di repo. Koneksi pooled dipakai aplikasi; koneksi unpooled dipakai Prisma migration lewat `DIRECT_URL` yang disiapkan oleh build script.
